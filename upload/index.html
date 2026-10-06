@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ScholComp demo — component view</title>
+<title>ScholComp — segment your own paper</title>
 <style>
   :root{
     --bg:#fafafa; --card:#ffffff; --ink:#1f2937; --muted:#6b7280;
@@ -50,15 +50,36 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>ScholComp demo <span style="font-weight:400;color:var(--muted)">— from article to components</span></h1>
-    <p style="font-size:14px"><a href="../upload/">Segment your own paper →</a></p>
-    <p id="paperline">loading…</p>
+    <h1>ScholComp <span style="font-weight:400;color:var(--muted)">— segment your own paper</span></h1>
+    <p id="paperline">Paste an arXiv link/ID below, or paste your paper text — then hit Segment.</p>
     <div class="stages">
       <span class="stage done">✓ segmentation (rule-based baseline)</span>
       <span class="stage todo">○ citation-intent mining (planned)</span>
       <span class="stage todo">○ entity linking (planned)</span>
     </div>
   </header>
+  <div class="card" style="margin-bottom:16px">
+    <h2>Your paper</h2>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button id="tab-url" class="comp active" style="margin:0;flex:1">arXiv link / ID</button>
+      <button id="tab-text" class="comp" style="margin:0;flex:1">Paste full text</button>
+    </div>
+    <div id="pane-url">
+      <input id="in-url" placeholder="1706.03762  or  https://arxiv.org/abs/1706.03762"
+             style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px">
+      <p style="font-size:12px;color:var(--muted)">We fetch the open-access HTML from ar5iv and segment it. Only arXiv papers work in this mode.</p>
+    </div>
+    <div id="pane-text" style="display:none">
+      <textarea id="in-text" rows="8" placeholder="Paste the full text of the paper here…"
+                style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px"></textarea>
+      <div style="margin-top:8px"><input type="file" id="in-file" accept=".txt,.html,.text,.md"></div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+      <button id="go" class="comp active" style="margin:0;padding:10px 24px;width:auto">Segment →</button>
+      <span id="upmsg" style="font-size:13px;color:var(--muted)"></span>
+    </div>
+  </div>
+
 
   <div class="card" style="margin-bottom:16px">
     <h2>Component graph</h2>
@@ -82,8 +103,7 @@
     Segmentation here is a deterministic rule-based baseline — no API keys, no network.
     The two citation edges are hand-annotated illustrative examples (provenance says
     <span style="font-family:var(--mono)">human</span>); automated citation mining is the next pipeline stage.
-    Paper text: “Attention Is All You Need” (arXiv:1706.03762, open access), fetched at demo build time;
-    only excerpts are stored in this repository.
+    Your upload is sent to the segmentation service, processed in memory, and never stored.
   </footer>
 </div>
 
@@ -108,16 +128,10 @@ let comps = [], edges = [], articleName = "";
 
 function codeOf(id){ return id.split("/").pop(); }
 
-async function init(){
-  let doc;
-  try{
-    const r = await fetch("../examples/arxiv-1706-03762.jsonld");
-    doc = await r.json();
-  }catch(e){
-    document.getElementById("paperline").innerHTML =
-      '<div class="err">Could not load the example JSON-LD. Serve this folder over HTTP, e.g. <span style="font-family:var(--mono)">python3 -m http.server</span> from the repo root, then open <span style="font-family:var(--mono)">viewer/index.html</span>.</div>';
-    return;
-  }
+const API = "https://www.sandx.io/api/segment";
+let lastDoc = null;
+
+function showDoc(doc){
   const g = doc["@graph"];
   const article = g.find(n => n["@type"] === "ScholarlyArticle");
   articleName = article["schema:name"];
@@ -125,9 +139,55 @@ async function init(){
            .sort((a,b) => a.order - b.order);
   edges = g.filter(n => n["@type"] === "ComponentCitation");
   document.getElementById("paperline").textContent =
-    articleName + "  ·  " + comps.length + " components  ·  " +
-    edges.length + " citation edges (illustrative)";
+    articleName + "  ·  " + comps.length + " components";
   renderList(); renderGraph(); renderEdges(); select(comps[0]["@id"]);
+}
+
+async function init(){
+  const tu = document.getElementById("tab-url"), tt = document.getElementById("tab-text");
+  const pu = document.getElementById("pane-url"), pt = document.getElementById("pane-text");
+  tu.onclick = () => { tu.classList.add("active"); tt.classList.remove("active"); pu.style.display=""; pt.style.display="none"; };
+  tt.onclick = () => { tt.classList.add("active"); tu.classList.remove("active"); pt.style.display=""; pu.style.display="none"; };
+  document.getElementById("in-file").onchange = (e) => {
+    const f = e.target.files[0]; if(!f) return;
+    const r = new FileReader();
+    r.onload = () => { document.getElementById("in-text").value = String(r.result||"").slice(0, 500000); };
+    r.readAsText(f);
+  };
+  document.getElementById("go").onclick = runSegment;
+}
+
+async function runSegment(){
+  const msg = document.getElementById("upmsg");
+  const useUrl = document.getElementById("pane-url").style.display !== "none";
+  let payload;
+  if(useUrl){
+    const u = document.getElementById("in-url").value.trim();
+    if(!u){ msg.textContent = "Enter an arXiv ID or URL first."; return; }
+    payload = {mode:"url", url:u};
+  }else{
+    const t = document.getElementById("in-text").value.trim();
+    if(!t){ msg.textContent = "Paste some text first."; return; }
+    payload = {mode:"text", text:t.slice(0,500000)};
+  }
+  msg.textContent = "Segmenting…";
+  try{
+    const r = await fetch(API, {method:"POST",
+      headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    const j = await r.json();
+    if(!j.ok){ msg.textContent = "Error: " + j.error; return; }
+    lastDoc = j.doc;
+    msg.innerHTML = "Done — " + j.n_components + " components. " +
+      '<a href="#" id="dl">Download JSON-LD</a>';
+    document.getElementById("dl").onclick = (e) => {
+      e.preventDefault();
+      const blob = new Blob([JSON.stringify(lastDoc,null,2)], {type:"application/ld+json"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob); a.download = "scholcomp-segments.jsonld"; a.click();
+    };
+    showDoc(j.doc);
+    document.getElementById("graph").scrollIntoView({behavior:"smooth", block:"center"});
+  }catch(e){ msg.textContent = "Request failed — the service may be cold-starting. Try again."; }
 }
 
 function renderList(){
