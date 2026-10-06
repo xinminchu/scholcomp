@@ -1,4 +1,8 @@
-__pycache__/
-*.pyc
-*.pyo
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.Rdata
+.httr-oauth
 .DS_Store
+.quarto
