@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScholComp demo — component view</title>
+<style>
+  :root{
+    --bg:#fafafa; --card:#ffffff; --ink:#1f2937; --muted:#6b7280;
+    --line:#e5e7eb; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:24px 16px 64px}
+  header h1{font-size:22px;margin:0 0 4px}
+  header p{margin:0 0 12px;color:var(--muted);font-size:14px}
+  .stages{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 20px}
+  .stage{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:#fff}
+  .stage.done{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+  .stage.todo{color:var(--muted)}
+  .grid{display:grid;grid-template-columns:280px 1fr;gap:16px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 12px}
+  .comp{display:block;width:100%;text-align:left;border:1px solid var(--line);background:#fff;
+        border-radius:10px;padding:10px 12px;margin:0 0 8px;cursor:pointer;font-size:14px}
+  .comp:hover{border-color:#9ca3af}
+  .comp.active{border-color:#111827;box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  .comp .code{font-family:var(--mono);font-weight:700;font-size:12px;
+              display:inline-block;min-width:34px}
+  .comp .t{color:var(--muted);font-size:12px;display:block;margin-top:2px}
+  .badge{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;
+         padding:2px 8px;color:#fff;margin-right:8px}
+  .meta{font-size:12px;color:var(--muted);margin:10px 0;font-family:var(--mono);
+        word-break:break-all}
+  .confbar{height:6px;background:#f3f4f6;border-radius:3px;overflow:hidden;max-width:220px}
+  .confbar i{display:block;height:100%;background:#10b981}
+  .prov{font-size:13px;color:var(--muted);margin:12px 0 0;line-height:1.6}
+  .body{font-size:15px;line-height:1.75;white-space:pre-wrap;margin:14px 0 0}
+  #graph{width:100%;height:auto;display:block}
+  .edge-label{font-size:10px;fill:#6b7280}
+  .node-label{font-size:11px;font-weight:700;fill:#fff;text-anchor:middle;pointer-events:none}
+  .node-title{font-size:10px;fill:#6b7280;text-anchor:middle}
+  footer{margin-top:28px;font-size:12px;color:var(--muted);line-height:1.7}
+  a{color:#2563eb}
+  .err{background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:12px;border-radius:10px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>ScholComp demo <span style="font-weight:400;color:var(--muted)">— from article to components</span></h1>
+    <p id="paperline">loading…</p>
+    <div class="stages">
+      <span class="stage done">✓ segmentation (rule-based baseline)</span>
+      <span class="stage todo">○ citation-intent mining (planned)</span>
+      <span class="stage todo">○ entity linking (planned)</span>
+    </div>
+  </header>
+
+  <div class="card" style="margin-bottom:16px">
+    <h2>Component graph</h2>
+    <svg id="graph" viewBox="0 0 1000 190" role="img" aria-label="component graph"></svg>
+    <div id="edges" style="font-size:13px;color:var(--muted);margin-top:8px"></div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Components</h2>
+      <div id="list"></div>
+    </div>
+    <div class="card">
+      <h2>Detail</h2>
+      <div id="detail"><p style="color:var(--muted)">Select a component.</p></div>
+    </div>
+  </div>
+
+  <footer>
+    Demo of the <a href="../schema/component-types.md">ScholComp component schema</a> (draft v0.1).
+    Segmentation here is a deterministic rule-based baseline — no API keys, no network.
+    The two citation edges are hand-annotated illustrative examples (provenance says
+    <span style="font-family:var(--mono)">human</span>); automated citation mining is the next pipeline stage.
+    Paper text: “Attention Is All You Need” (arXiv:1706.03762, open access), fetched at demo build time;
+    only excerpts are stored in this repository.
+  </footer>
+</div>
+
+<script>
+const COLORS = {
+  MotivationProblem:   "#d97706",
+  LiteratureReview:    "#0284c7",
+  MethodStrategy:      "#059669",
+  ProcessResults:      "#7c3aed",
+  ConclusionExtensions:"#e11d48",
+  AppendicesArtifacts: "#475569"
+};
+const NAMES = {
+  MotivationProblem:   "A · Motivation / Problem",
+  LiteratureReview:    "B · Literature Review",
+  MethodStrategy:      "C · Method / Strategy",
+  ProcessResults:      "D · Process / Results",
+  ConclusionExtensions:"E · Conclusion / Extensions",
+  AppendicesArtifacts: "F · Appendices / Artifacts"
+};
+let comps = [], edges = [], articleName = "";
+
+function codeOf(id){ return id.split("/").pop(); }
+
+async function init(){
+  let doc;
+  try{
+    const r = await fetch("../examples/arxiv-1706-03762.jsonld");
+    doc = await r.json();
+  }catch(e){
+    document.getElementById("paperline").innerHTML =
+      '<div class="err">Could not load the example JSON-LD. Serve this folder over HTTP, e.g. <span style="font-family:var(--mono)">python3 -m http.server</span> from the repo root, then open <span style="font-family:var(--mono)">viewer/index.html</span>.</div>';
+    return;
+  }
+  const g = doc["@graph"];
+  const article = g.find(n => n["@type"] === "ScholarlyArticle");
+  articleName = article["schema:name"];
+  comps = g.filter(n => n["@type"] === "ScholarlyComponent")
+           .sort((a,b) => a.order - b.order);
+  edges = g.filter(n => n["@type"] === "ComponentCitation");
+  document.getElementById("paperline").textContent =
+    articleName + "  ·  " + comps.length + " components  ·  " +
+    edges.length + " citation edges (illustrative)";
+  renderList(); renderGraph(); renderEdges(); select(comps[0]["@id"]);
+}
+
+function renderList(){
+  const el = document.getElementById("list");
+  el.innerHTML = "";
+  comps.forEach(c => {
+    const b = document.createElement("button");
+    b.className = "comp"; b.dataset.id = c["@id"];
+    b.innerHTML =
+      '<span class="code" style="color:' + COLORS[c.componentType] + '">' +
+      codeOf(c["@id"]) + '</span> ' +
+      '<span class="badge" style="background:' + COLORS[c.componentType] + '">' +
+      c.componentType.charAt(0) + '</span>' +
+      '<span class="t">' + esc(c["schema:name"]) + "</span>";
+    b.onclick = () => select(c["@id"]);
+    el.appendChild(b);
+  });
+}
+
+function select(id){
+  document.querySelectorAll(".comp").forEach(b =>
+    b.classList.toggle("active", b.dataset.id === id));
+  const c = comps.find(x => x["@id"] === id);
+  const d = document.getElementById("detail");
+  const pct = Math.round(c.confidence * 100);
+  d.innerHTML =
+    '<div><span class="badge" style="background:' + COLORS[c.componentType] + '">' +
+    NAMES[c.componentType] + "</span></div>" +
+    '<h3 style="margin:10px 0 0;font-size:18px">' + esc(c["schema:name"]) + "</h3>" +
+    '<div class="meta">' + esc(c["@id"]) + "<br>" + esc(c.locator || "") + "</div>" +
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:4px">type confidence: ' + pct + '%</div>' +
+    '<div class="confbar"><i style="width:' + pct + '%"></i></div>' +
+    '<p class="prov">provenance — method: <b>' + esc(c.extractionMethod) + "</b> · model: " +
+    esc(c.extractorModel) + "<br>" + esc(c.note || "") + "</p>" +
+    '<p class="body">' + esc(c["schema:text"]) + "</p>";
+  document.querySelectorAll("#graph .node").forEach(n => {
+    n.setAttribute("stroke", n.dataset.id === id ? "#111827" : "none");
+    n.setAttribute("stroke-width", n.dataset.id === id ? "3" : "0");
+  });
+}
+
+function renderGraph(){
+  const svg = document.getElementById("graph");
+  const NS = "http://www.w3.org/2000/svg";
+  const n = comps.length, W = 1000, y = 70;
+  const x = i => 70 + i * ((W - 140) / Math.max(1, n - 1));
+  const id2i = {}; comps.forEach((c,i) => id2i[c["@id"]] = i);
+
+  edges.forEach(e => {
+    const ti = id2i[e.targetComponent["@id"]];
+    if (ti === undefined) return;               // external source: draw incoming stub
+    const x2 = x(ti), x1 = 30;                  // from outside (left)
+    const p = document.createElementNS(NS, "path");
+    const mx = (x1 + x2) / 2;
+    p.setAttribute("d", `M ${x1} ${y-14} Q ${mx} ${y-64} ${x2-16} ${y-14}`);
+    p.setAttribute("fill", "none"); p.setAttribute("stroke", "#9ca3af");
+    p.setAttribute("stroke-width", "1.5"); p.setAttribute("stroke-dasharray", "5 3");
+    p.setAttribute("marker-end", "url(#arr)");
+    svg.appendChild(p);
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", mx); t.setAttribute("y", y - 52);
+    t.setAttribute("class", "edge-label"); t.setAttribute("text-anchor", "middle");
+    t.textContent = e.citationIntent + (e.extractionMethod === "human" ? " (example)" : "");
+    svg.appendChild(t);
+  });
+
+  const defs = document.createElementNS(NS, "defs");
+  defs.innerHTML = '<marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="#9ca3af" stroke-width="1.5"/></marker>';
+  svg.appendChild(defs);
+
+  comps.forEach((c, i) => {
+    const cx = x(i);
+    const circ = document.createElementNS(NS, "circle");
+    circ.setAttribute("cx", cx); circ.setAttribute("cy", y);
+    circ.setAttribute("r", 20); circ.setAttribute("fill", COLORS[c.componentType]);
+    circ.setAttribute("class", "node"); circ.dataset.id = c["@id"];
+    circ.style.cursor = "pointer";
+    circ.onclick = () => select(c["@id"]);
+    svg.appendChild(circ);
+    const lab = document.createElementNS(NS, "text");
+    lab.setAttribute("x", cx); lab.setAttribute("y", y + 4);
+    lab.setAttribute("class", "node-label"); lab.textContent = codeOf(c["@id"]);
+    svg.appendChild(lab);
+    const nm = document.createElementNS(NS, "text");
+    nm.setAttribute("x", cx); nm.setAttribute("y", y + 42);
+    nm.setAttribute("class", "node-title");
+    const short = c["schema:name"].length > 22 ? c["schema:name"].slice(0, 21) + "…" : c["schema:name"];
+    nm.textContent = short;
+    svg.appendChild(nm);
+    if (i < n - 1){
+      const ln = document.createElementNS(NS, "line");
+      ln.setAttribute("x1", cx + 20); ln.setAttribute("x2", x(i+1) - 20);
+      ln.setAttribute("y1", y); ln.setAttribute("y2", y);
+      ln.setAttribute("stroke", "#e5e7eb"); ln.setAttribute("stroke-width", "2");
+      svg.appendChild(ln);
+    }
+  });
+}
+
+function renderEdges(){
+  const el = document.getElementById("edges");
+  el.innerHTML = edges.map(e => {
+    const t = comps.find(c => c["@id"] === e.targetComponent["@id"]);
+    return "↳ <b>" + esc(e.citationIntent) + "</b> → " +
+      (t ? esc(codeOf(t["@id"]) + " · " + t["schema:name"]) : esc(e.targetComponent["@id"])) +
+      ' <span style="color:#9ca3af">[' + esc(e.extractionMethod) + "]</span>";
+  }).join("<br>");
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, m =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m])); }
+
+init();
+</script>
+</body>
+</html>
